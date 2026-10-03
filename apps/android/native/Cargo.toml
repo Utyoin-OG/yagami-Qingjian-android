@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
-jni = "0.21"
+jni = "0.22"
 qingjian-core.workspace = true
 qingjian-dictionary.workspace = true
 qingjian-translate.workspace = true
