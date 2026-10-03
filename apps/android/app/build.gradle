@@ -17,6 +17,8 @@ def hasReleaseSigning = [
 tasks.register("prepareQingjianAssets", Copy) {
     from(rootProject.file("../../assets/lexicon/dict.tsv"))
     from(rootProject.file("../../assets/glossary/glossary-en.tsv"))
+    from(rootProject.file("../../assets/glossary/glossary-ja.tsv"))
+    from(rootProject.file("../../assets/glossary/glossary-es.tsv"))
     into(qingjianAssets)
 }
 
@@ -29,8 +31,8 @@ android {
         applicationId "io.github.utyoinog.yagamiime"
         minSdk 26
         targetSdk 35
-        versionCode 6
-        versionName "0.1.5"
+        versionCode 7
+        versionName "0.1.6"
     }
 
     sourceSets {

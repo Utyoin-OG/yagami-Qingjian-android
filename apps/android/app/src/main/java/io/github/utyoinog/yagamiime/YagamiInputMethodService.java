@@ -1,6 +1,8 @@
 package io.github.utyoinog.yagamiime;
 
 import android.annotation.SuppressLint;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -12,6 +14,7 @@ import android.os.Looper;
 import android.text.InputType;
 import android.text.Spannable;
 import android.text.SpannableString;
+import android.text.TextUtils;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.RelativeSizeSpan;
 import android.view.Gravity;
@@ -51,11 +54,17 @@ public final class YagamiInputMethodService extends InputMethodService {
     private final Runnable beginRepeatedBackspace = this::startRepeatedBackspace;
     private final Runnable repeatedBackspace = this::repeatBackspace;
     private NativeBridge nativeBridge;
+    private ClipboardHistory clipboardHistory;
+    private ClipboardManager clipboardManager;
+    private ClipboardManager.OnPrimaryClipChangedListener clipboardListener;
     private LinearLayout candidates;
     private LinearLayout keyRows;
     private TextView modeKey;
     private TextView shiftKey;
+    private TextView clipboardKey;
     private final List<TextView> letterKeys = new ArrayList<>();
+    private String learningLanguage;
+    private boolean showingClipboard;
     private boolean chinese = true;
     private boolean deletingRepeatedly;
     private boolean shifted;
@@ -64,10 +73,30 @@ public final class YagamiInputMethodService extends InputMethodService {
     @Override
     public void onCreate() {
         super.onCreate();
+        clipboardHistory = new ClipboardHistory(this);
+        clipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        clipboardListener = this::capturePrimaryClipboard;
+        if (clipboardManager != null) {
+            clipboardManager.addPrimaryClipChangedListener(clipboardListener);
+        }
+        reloadNativeBridge();
+    }
+
+    private void reloadNativeBridge() {
+        String selectedLanguage = AppSettings.learningLanguage(this);
+        if (nativeBridge != null && selectedLanguage.equals(learningLanguage)) {
+            return;
+        }
         try {
             File dictionary = copyAsset("dict.tsv");
-            File glossary = copyAsset("glossary-en.tsv");
-            nativeBridge = new NativeBridge(dictionary.getAbsolutePath(), glossary.getAbsolutePath());
+            File glossary = copyAsset(AppSettings.glossaryAsset(selectedLanguage));
+            NativeBridge replacement = new NativeBridge(
+                    dictionary.getAbsolutePath(), glossary.getAbsolutePath());
+            if (nativeBridge != null) {
+                nativeBridge.close();
+            }
+            nativeBridge = replacement;
+            learningLanguage = selectedLanguage;
         } catch (Exception error) {
             Toast.makeText(this, getString(R.string.startup_failed, error.getMessage()), Toast.LENGTH_LONG).show();
         }
@@ -79,6 +108,10 @@ public final class YagamiInputMethodService extends InputMethodService {
         keyboard.setOrientation(LinearLayout.VERTICAL);
         keyboard.setPadding(dp(3), 0, dp(3), dp(5));
         keyboard.setBackgroundColor(BACKGROUND);
+        LinearLayout candidateBar = new LinearLayout(this);
+        candidateBar.setOrientation(LinearLayout.HORIZONTAL);
+        candidateBar.setGravity(Gravity.CENTER_VERTICAL);
+        candidateBar.setBackgroundColor(Color.rgb(247, 248, 249));
         HorizontalScrollView scroller = new HorizontalScrollView(this);
         scroller.setHorizontalScrollBarEnabled(false);
         scroller.setBackgroundColor(Color.rgb(247, 248, 249));
@@ -87,9 +120,16 @@ public final class YagamiInputMethodService extends InputMethodService {
         candidates.setGravity(Gravity.CENTER_VERTICAL);
         scroller.addView(candidates, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(58)));
-        keyboard.addView(scroller, new LinearLayout.LayoutParams(
+        candidateBar.addView(scroller, new LinearLayout.LayoutParams(0, dp(58), 1));
+        clipboardKey = specialKey("剪贴板");
+        clipboardKey.setTextSize(13);
+        clipboardKey.setContentDescription(getString(R.string.clipboard));
+        clipboardKey.setOnClickListener(view -> toggleClipboardHistory());
+        LinearLayout.LayoutParams clipboardParams = new LinearLayout.LayoutParams(dp(62), dp(48));
+        clipboardParams.setMargins(dp(3), dp(5), dp(3), dp(5));
+        candidateBar.addView(clipboardKey, clipboardParams);
+        keyboard.addView(candidateBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
-
         keyRows = new LinearLayout(this);
         keyRows.setOrientation(LinearLayout.VERTICAL);
         keyboard.addView(keyRows, new LinearLayout.LayoutParams(
@@ -102,6 +142,12 @@ public final class YagamiInputMethodService extends InputMethodService {
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
+        reloadNativeBridge();
+        capturePrimaryClipboard();
+        showingClipboard = false;
+        if (clipboardKey != null) {
+            clipboardKey.setText(R.string.clipboard);
+        }
         clearComposition();
         showLetterLayout();
     }
@@ -116,6 +162,9 @@ public final class YagamiInputMethodService extends InputMethodService {
     @Override
     public void onDestroy() {
         stopRepeatedBackspace();
+        if (clipboardManager != null && clipboardListener != null) {
+            clipboardManager.removePrimaryClipChangedListener(clipboardListener);
+        }
         if (nativeBridge != null) {
             nativeBridge.close();
         }
@@ -332,6 +381,7 @@ public final class YagamiInputMethodService extends InputMethodService {
     }
 
     private void letter(char letter) {
+        hideClipboardHistory();
         InputConnection connection = getCurrentInputConnection();
         if (connection == null) {
             return;
@@ -374,6 +424,80 @@ public final class YagamiInputMethodService extends InputMethodService {
             InputMethodManager manager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
             manager.showInputMethodPicker();
         }
+    }
+
+    private void capturePrimaryClipboard() {
+        if (clipboardManager == null || !clipboardManager.hasPrimaryClip()) {
+            return;
+        }
+        ClipData clip = clipboardManager.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            return;
+        }
+        CharSequence value = clip.getItemAt(0).coerceToText(this);
+        if (value != null) {
+            clipboardHistory.add(value.toString());
+            if (showingClipboard) {
+                showClipboardHistory();
+            }
+        }
+    }
+
+    private void toggleClipboardHistory() {
+        showingClipboard = !showingClipboard;
+        clipboardKey.setText(showingClipboard ? R.string.back_to_candidates : R.string.clipboard);
+        if (showingClipboard) {
+            capturePrimaryClipboard();
+            showClipboardHistory();
+        } else {
+            updateCandidates();
+        }
+    }
+
+    private void hideClipboardHistory() {
+        if (!showingClipboard) {
+            return;
+        }
+        showingClipboard = false;
+        if (clipboardKey != null) {
+            clipboardKey.setText(R.string.clipboard);
+        }
+        updateCandidates();
+    }
+
+    private void showClipboardHistory() {
+        if (candidates == null) {
+            return;
+        }
+        candidates.removeAllViews();
+        List<String> items = clipboardHistory.items();
+        if (items.isEmpty()) {
+            hint(getString(R.string.clipboard_empty));
+            return;
+        }
+        for (String item : items) {
+            TextView entry = new TextView(this);
+            entry.setGravity(Gravity.CENTER_VERTICAL);
+            entry.setPadding(dp(14), 0, dp(14), 0);
+            entry.setTextSize(15);
+            entry.setTextColor(Color.rgb(24, 40, 34));
+            entry.setSingleLine(true);
+            entry.setEllipsize(TextUtils.TruncateAt.END);
+            entry.setMaxWidth(dp(220));
+            entry.setText(item.replaceAll("\\s+", " "));
+            entry.setBackground(keyBackground(Color.rgb(247, 248, 249)));
+            entry.setOnClickListener(view -> pasteClipboardItem(item));
+            candidates.addView(entry, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(58)));
+        }
+    }
+
+    private void pasteClipboardItem(String text) {
+        if (hasComposition()) {
+            commitCandidate(0);
+        }
+        commitText(text);
+        hideClipboardHistory();
     }
 
     private void space() {
@@ -485,6 +609,10 @@ public final class YagamiInputMethodService extends InputMethodService {
 
     private void updateCandidates() {
         if (candidates == null) {
+            return;
+        }
+        if (showingClipboard) {
+            showClipboardHistory();
             return;
         }
         candidates.removeAllViews();

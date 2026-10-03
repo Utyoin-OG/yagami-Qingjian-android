@@ -6,6 +6,17 @@
     <string name="setup_body">基于青简开源核心开发的非官方 Android 输入法。\n\n1. 在系统设置中启用输入法\n2. 返回这里选择 Yagami\n3. 在任意文本框中输入拼音</string>
     <string name="enable_ime">启用输入法</string>
     <string name="select_ime">选择 Yagami 输入法</string>
+    <string name="learning_language">候选译词语言</string>
+    <string name="clipboard">剪贴板</string>
+    <string name="back_to_candidates">返回</string>
+    <string name="clipboard_empty">暂无剪贴板记录</string>
+    <string name="clear_clipboard_history">清空剪贴板记录</string>
+    <string name="clipboard_history_cleared">剪贴板记录已清空</string>
     <string name="startup_failed">Yagami 启动失败：%1$s</string>
     <string name="idle_hint">Yagami</string>
+    <string-array name="learning_languages">
+        <item>英语</item>
+        <item>日语</item>
+        <item>西班牙语</item>
+    </string-array>
 </resources>
